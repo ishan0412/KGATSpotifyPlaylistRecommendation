@@ -19,7 +19,7 @@ from models.graph import GraphEntityType, GraphRelationType, GraphTripletField
 
 load_dotenv()
 
-def create_lists_of_trackids_and_entity_relation_triplets(n: int = None, random_state: int = None):
+def create_lists_of_trackids_and_entity_relation_triplets(n: int | None = None, random_state: int | None = None):
     """
     Creates a heterogeneous graph of "entities" (nodes: playlists, tracks, artists, and albums) and "relations" (edges)
     between them. This graph is kept in `graph.csv` as a list of entity-relation-entity triplets, having mapped each 
@@ -30,6 +30,7 @@ def create_lists_of_trackids_and_entity_relation_triplets(n: int = None, random_
         - `random_state`: the seed with which entries are randomly sampled
     #### Throws:
         - `FileNotFoundError`: if any of the dataset files haven't been downloaded yet or aren't in the data directory
+        - `NameError`: if no path to a data directory has been set as an environment variable
     """
     # Make sure the playlist and track datasets have been downloaded. If not, raise an exception:
     playlist_dataset_csv = _get_path_to_dataset_csv(PLAYLIST_DATASET_ZIP_FILE_NAME, PLAYLIST_DATASET_CSV_FILE_NAME)
@@ -100,6 +101,7 @@ def create_feature_matrix_for_tracks(*features: str) -> torch.Tensor:
     #### Throws:
         - `FileNotFoundError`: if the track dataset hasn't been downloaded yet, or if `trackids.csv`, the file for the 
         mapping between tracks' Spotify IDs and graph node indices, hasn't been made yet or isn't in the data directory
+        - `NameError`: if no path to a data directory has been set as an environment variable
         - `ValueError`: if any of `features` are not valid fields in the track dataset
     """
     if invalid_features := (set(features) - TrackDatasetField._FEATURE_SET):
@@ -136,6 +138,7 @@ def create_edge_index_matrix_for_relation_type(relationtype: GraphRelationType) 
     #### Throws:
         - `FileNotFoundError`: if `graph.csv` - the file defining the heterogenous graph of tracks, playlists, artists, 
         albums, and their relations - hasn't been made yet or isn't in the data directory
+        - `NameError`: if no path to a data directory has been set as an environment variable
         - `TypeError`: if `relationtype` is not a member of `GraphRelationType`
     """
     if not isinstance(relationtype, GraphRelationType):
@@ -153,7 +156,8 @@ def create_edge_index_matrix_for_relation_type(relationtype: GraphRelationType) 
 
 # Private utility method for getting the path to any .csv dataset file in whichever folder data is kept.
 def _get_path_to_dataset_csv(folder: str, filename: str) -> str:
-    path_to_folder = os.path.join(os.getenv('DATA_DIR'), folder)
+    _raise_error_if_data_directory_not_set()
+    path_to_folder = os.path.join(os.getenv('DATA_DIR'), folder) # type: ignore
     path_to_csv_file = os.path.join(path_to_folder, filename) + '.csv'
     if os.path.exists(path_to_folder) and os.path.isfile(path_to_csv_file):
         return path_to_csv_file
@@ -163,7 +167,8 @@ def _get_path_to_dataset_csv(folder: str, filename: str) -> str:
 # Private utility method for getting the path to any processed data file output by 
 # create_lists_of_trackids_and_entity_relation_triplets().
 def _get_path_to_processed_data_file(filename: str) -> str:
-    return os.path.join(os.getenv('DATA_DIR'), filename) + '.csv'
+    _raise_error_if_data_directory_not_set()
+    return os.path.join(os.getenv('DATA_DIR'), filename) + '.csv' # type: ignore
 
 def _get_entity_relation_tuple_dataframe(df: pd.DataFrame, head: GraphEntityType, tail: GraphEntityType, 
                                          relation: GraphRelationType) -> pd.DataFrame:
@@ -192,6 +197,10 @@ def _map_graph_entity_type_to_dataframe_field(entitytype: GraphEntityType) -> st
             return TrackDatasetField.ARTISTS
     raise Exception
 
-def _comma_and_ampersand_separated_string_to_tuple(s: str) -> tuple[str]:
+def _comma_and_ampersand_separated_string_to_tuple(s: str) -> tuple[str, ...]:
     s1 = s.split(',')
     return tuple(map(str.strip, s1[:-1] + s1[-1].split('&')))
+
+def _raise_error_if_data_directory_not_set():
+    if os.getenv('DATA_DIR') is None:
+        raise NameError('No path to a data directory has been set as an environment variable.')
