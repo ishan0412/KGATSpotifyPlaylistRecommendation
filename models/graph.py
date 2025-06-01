@@ -1,22 +1,21 @@
-"""Classes for managing the heterogeneous graph on which this project's neural network will learn, consisting of entities 
-(playlists, tracks, artists, and albums) and relations between them."""
+"""Classes of constants referencing the heterogeneous graph on which this project's neural network will learn, 
+consisting of entities (playlists, tracks, artists, and albums) and relations between them."""
 
-from enum import Enum
-
-class GraphEntityType(Enum):
-    """Enum for the different entities (nodes) in the graph."""
+class GraphEntityType:
+    """The different entities (nodes) in the graph."""
 
     PLAYLIST = 'playlist'
     TRACK = 'track'
     ARTIST = 'artist'
     ALBUM = 'album'
 
-class GraphRelationType(Enum):
-    """Enum for the different relations (edges) between entities in the graph."""
+class GraphRelationType:
+    """The different relations (edges) between entities in the graph."""
 
     HAS_TRACK = 'has_track'
     HAS_ARTIST = 'has_artist'
     IN_ALBUM = 'in_album'
+    _RELATIONS = {'has_track', 'has_artist', 'in_album'}
 
 class GraphTripletField:
     """Field names of `graph.csv`, which stores the graph as a list of entity-relation-entity triplets."""

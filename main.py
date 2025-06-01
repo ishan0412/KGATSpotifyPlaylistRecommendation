@@ -12,6 +12,7 @@ from utils.datautils import (
                                      create_lists_of_trackids_and_entity_relation_triplets,
 )
 from utils.downloadutils import download_and_extract_url
+from utils.pygdatautils import create_hetero_data
 
 # Download the playlist and track datasets:
 download_and_extract_url(PLAYLIST_DATASET_URL, PLAYLIST_DATASET_ZIP_FILE_NAME)
@@ -28,10 +29,12 @@ print(x[0])
 print(x.shape)
 
 # Make edge index matrices for each of the three relations defined between graph nodes/entities:
-has_track_edge_index = create_edge_index_matrix_for_relation_type(GraphRelationType.HAS_TRACK)
-has_artist_edge_index = create_edge_index_matrix_for_relation_type(GraphRelationType.HAS_ARTIST)
-in_album_edge_index = create_edge_index_matrix_for_relation_type(GraphRelationType.IN_ALBUM)
-print(has_track_edge_index.shape)
-print(has_artist_edge_index.shape)
-print(in_album_edge_index.shape)
+playlist_to_track_edge_index = create_edge_index_matrix_for_relation_type(GraphRelationType.HAS_TRACK)
+track_to_artist_edge_index = create_edge_index_matrix_for_relation_type(GraphRelationType.HAS_ARTIST)
+track_to_album_edge_index = create_edge_index_matrix_for_relation_type(GraphRelationType.IN_ALBUM)
+print(playlist_to_track_edge_index.shape)
+print(track_to_artist_edge_index.shape)
+print(track_to_album_edge_index.shape)
+
+print(create_hetero_data(x, playlist_to_track_edge_index, track_to_artist_edge_index, track_to_album_edge_index))
 
