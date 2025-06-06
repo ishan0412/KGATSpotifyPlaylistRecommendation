@@ -12,7 +12,7 @@ from utils.datautils import (
                                      create_lists_of_trackids_and_entity_relation_triplets,
 )
 from utils.downloadutils import download_and_extract_url
-from utils.pygdatautils import create_hetero_data
+from utils.torchdatautils import EntityRelationTripletDataset, create_hetero_data
 
 # Download the playlist and track datasets:
 download_and_extract_url(PLAYLIST_DATASET_URL, PLAYLIST_DATASET_ZIP_FILE_NAME)
@@ -36,5 +36,10 @@ print(playlist_to_track_edge_index.shape)
 print(track_to_artist_edge_index.shape)
 print(track_to_album_edge_index.shape)
 
-print(create_hetero_data(x, playlist_to_track_edge_index, track_to_artist_edge_index, track_to_album_edge_index))
-
+# Make training and test sets of entity-relation-entity triplets (typed graph edges) using the track feature matrix and
+# edge index matrices, wrapped into a PyTorch Geometric HeteroData object:
+data = create_hetero_data(x, playlist_to_track_edge_index, track_to_artist_edge_index, track_to_album_edge_index)
+dataset = EntityRelationTripletDataset(data)
+trainset, testset = EntityRelationTripletDataset.split_by_fraction(dataset, fraction=0.8)
+trainloader = EntityRelationTripletDataset.create_dataloader(trainset)
+print(next(iter(trainloader)))
