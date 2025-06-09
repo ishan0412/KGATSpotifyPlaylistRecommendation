@@ -14,6 +14,11 @@ EntityRelationTripletDatasetOrSubset = TypeVar('EntityRelationTripletDatasetOrSu
                                                Subset['EntityRelationTripletDataset'])
 """Union of the `EntityRelationTripletDataset` class type and the `Subset` type returned by PyTorch's dataset splitting methods."""
 
+RELATION_TYPE_TO_ID_MAP = {GraphRelationType.HAS_TRACK: 0, 
+                           GraphRelationType.HAS_ARTIST: 1, 
+                           GraphRelationType.IN_ALBUM: 2}
+"""A mapping of the relation types in this project's heterogeneous graph to unique integers."""
+
 class EntityRelationTripletDatasetEntryKey:
     """Keys for an `EntityRelationTripletDataset`'s entries, which are string-tensor dictionaries."""
 
@@ -32,18 +37,13 @@ class EntityRelationTripletDataset(Dataset):
     wrapper class.
     """
 
-    RELATION_TO_ID_MAP = {GraphRelationType.HAS_TRACK: 0, 
-                          GraphRelationType.HAS_ARTIST: 1, 
-                          GraphRelationType.IN_ALBUM: 2}
-    """A mapping of the graph's relation types to unique integers."""
-
     x: torch.Tensor
     """The feature matrix for this graph's nodes representing tracks."""
 
     triplets: torch.Tensor
     """The graph's entity-relation-entity triplets in the form `[head, tail, relation]`, where `head` and `tail` are 
     the graph indices of a triplet's head and tail nodes, and `relation` is the ID to which the relation type between 
-    head and tail is mapped by `RELATION_TO_ID_MAP`."""
+    head and tail is mapped by `RELATION_TYPE_TO_ID_MAP`."""
 
     def __init__(self, data: HeteroData):
         """
@@ -60,7 +60,7 @@ class EntityRelationTripletDataset(Dataset):
             edge_index_for_relation = data[edge_type].edge_index
             num_edges_for_relation = edge_index_for_relation.size(1)
             triplets_for_relation = torch.cat((edge_index_for_relation, 
-                                               torch.full((1, num_edges_for_relation), self.RELATION_TO_ID_MAP[edge_type[1]], dtype=torch.long)), 
+                                               torch.full((1, num_edges_for_relation), RELATION_TYPE_TO_ID_MAP[edge_type[1]], dtype=torch.long)), 
                                                dim=0)
             # Shuffle the order in which the entity-relation-entity triplets are added:
             triplets.append(triplets_for_relation.T[torch.randperm(num_edges_for_relation)])
@@ -72,7 +72,7 @@ class EntityRelationTripletDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
         head, tail, relation = triplet_at_index = self.triplets[index]
         return {EntityRelationTripletDatasetEntryKey.X: self.x[tail 
-                                                               if (relation == self.RELATION_TO_ID_MAP[GraphRelationType.HAS_TRACK]) 
+                                                               if (relation == RELATION_TYPE_TO_ID_MAP[GraphRelationType.HAS_TRACK]) 
                                                                else head],
                 EntityRelationTripletDatasetEntryKey.TRIPLET: triplet_at_index}
     
@@ -86,7 +86,7 @@ class EntityRelationTripletDataset(Dataset):
         #### Returns:
         two subsets (of PyTorch's `Subset` type) of the input dataset, its entries randomly apportioned among the two 
         according to `fraction`
-        #### Raises:
+        #### Throws:
         - `ValueError`: if `fraction` is not a single number between 0 and 1
         """
         if 0 <= fraction <= 1:
