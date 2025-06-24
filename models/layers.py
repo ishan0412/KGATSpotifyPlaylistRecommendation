@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from utils.torchdatautils import (
     RELATION_TYPE_TO_ID_MAP,
-    EntityRelationTripletDatasetEntryKey,
+    EntityRelationTripletAndEgoNetworkDataLoaderKey,
 )
 
 from .graph import GraphEntityType, GraphRelationType
@@ -101,11 +101,12 @@ class KnowledgeGraphEmbeddingLayer(nn.Module):
         - `ValueError`: if the dimension of `input`'s track feature matrix doesn't match the `track_feature_dim` with 
         which this layer was instantiated, or the matrix of triplets doesn't have exactly three columns
         """
-        for key in (EntityRelationTripletDatasetEntryKey.X, EntityRelationTripletDatasetEntryKey.TRIPLET):
+        for key in (EntityRelationTripletAndEgoNetworkDataLoaderKey.TRACK_FEATURE_MATRIX, 
+                    EntityRelationTripletAndEgoNetworkDataLoaderKey.HTR_TRIPLET_BATCH):
             if key not in input:
                 raise KeyError(f'The input dictionary representing a heterogeneous graph needs an entry with key {key}.')
-        x = input[EntityRelationTripletDatasetEntryKey.X]
-        triplets = input[EntityRelationTripletDatasetEntryKey.TRIPLET]
+        x = input[EntityRelationTripletAndEgoNetworkDataLoaderKey.TRACK_FEATURE_MATRIX]
+        triplets = input[EntityRelationTripletAndEgoNetworkDataLoaderKey.HTR_TRIPLET_BATCH]
         if (input_track_feature_dim := x.size(1)) != self.track_feature_dim:
             raise ValueError(f'The dimension of the input track feature matrix ({input_track_feature_dim}) does not ' 
                              + 'match the value of the track_feature_dim parameter passed into this layer\'s ' 
