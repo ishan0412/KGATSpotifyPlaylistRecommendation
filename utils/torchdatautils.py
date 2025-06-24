@@ -1,60 +1,76 @@
-"""Utility methods and classes for turning the heterogeneous graph this project uses into PyTorch datasets to be trained
-and tested on."""
+"""Utility methods and classes for turning the heterogeneous graph this project uses into PyTorch Geometric datasets to 
+be trained and tested on."""
 
-from typing import TypeVar
+from typing import Iterator
 
 import torch
-from torch.utils.data import DataLoader, Dataset, Subset, random_split
+from torch.utils.data import DataLoader, TensorDataset
 from torch_geometric.data import HeteroData
+from torch_geometric.loader import LinkNeighborLoader
+from torch_geometric.transforms import RandomLinkSplit
 
 from models.graph import GraphEntityType, GraphRelationType
-
-EntityRelationTripletDatasetOrSubset = TypeVar('EntityRelationTripletDatasetOrSubset', 
-                                               'EntityRelationTripletDataset', 
-                                               Subset['EntityRelationTripletDataset'])
-"""Union of the `EntityRelationTripletDataset` class type and the `Subset` type returned by PyTorch's dataset splitting methods."""
 
 RELATION_TYPE_TO_ID_MAP = {GraphRelationType.HAS_TRACK: 0, 
                            GraphRelationType.HAS_ARTIST: 1, 
                            GraphRelationType.IN_ALBUM: 2}
 """A mapping of the relation types in this project's heterogeneous graph to unique integers."""
 
-class EntityRelationTripletDatasetEntryKey:
-    """Keys for an `EntityRelationTripletDataset`'s entries, which are string-tensor dictionaries."""
+RELATION_ID_TO_HEAD_TAIL_ENTITY_TYPES_MAP = {0: (GraphEntityType.PLAYLIST, GraphEntityType.TRACK), 
+                                             1: (GraphEntityType.TRACK, GraphEntityType.ARTIST), 
+                                             2: (GraphEntityType.TRACK, GraphEntityType.ALBUM)}
+"""A mapping of integer IDs of the relations in this project's heterogeneous graph to the names of their associated head 
+and tail entities."""
 
-    X = 'x'
-    """The feature vector of whichever node of the triplet -- head or tail -- represents a track."""
+class EntityRelationTripletAndEgoNetworkDataLoaderKey:
+    """Keys for the string-tensor dictionaries of batched data returned by `EntityRelationTripletAndEgoNetworkDataLoader`."""
 
-    TRIPLET = 'triplet'
-    """A three-element tensor `[head, tail, relation]` for an entity-relation-entity triplet, where `head` and `tail` 
-    are the graph indices of this triplet's head and tail nodes, and `relation` is an ID for the type of relation 
-    between the head and tail."""
+    TRACK_FEATURE_MATRIX = 'track_feature_matrix'
+    """The feature vectors of whichever nodes of a triplet batch -- for each triplet, either its head or its tail -- 
+    represent tracks."""
 
-class EntityRelationTripletDataset(Dataset):
+    HTR_TRIPLET_BATCH = 'htr_triplet_batch'
+    """A batch of three-element tensors `[head, tail, relation]` for entity-relation-entity triplets, where for each 
+    triplet, `head` and `tail` are the graph indices of its head and tail nodes, and `relation` is an ID for the type 
+    of relation between the head and tail."""
+
+    UIJ_EGO_NETWORK_BATCH = 'uij_ego_network_batch'
+    """A subgraph of edges of which the heads are within a number of hops of a batch of nodes representing playlists in
+    the heterogeneous graph; i.e., these nodes' *ego-networks*, all the graph edges emanating from them."""
+    
+
+class EntityRelationTripletAndEgoNetworkDataLoader:
     """
-    A custom PyTorch dataset class for storing and accessing a heterogeneous graph's entity-relation-entity triplets. 
-    Its entries are string-tensor dictionaries to be accessed by the keys in the `EntityRelationTripletDatasetEntryKey` 
-    wrapper class.
+    A wrapper class for loading batches of entity-relation-entity triplets and ego-network subgraphs rooted in 
+    batches of playlist entity nodes. Following the KGAT training procedure outlined by Wang *et al.*, the triplets are 
+    passed into the knowledge graph embedding layer of the model this project uses; the subgraphs into the graph 
+    attention convolutional layers.
     """
 
-    x: torch.Tensor
-    """The feature matrix for this graph's nodes representing tracks."""
+    NUM_NEIGHBORS_PER_HOP: int = 10
+    """The maximum number of neighbors to sample of each node when constructing the ego-network subgraphs."""
 
-    triplets: torch.Tensor
-    """The graph's entity-relation-entity triplets in the form `[head, tail, relation]`, where `head` and `tail` are 
-    the graph indices of a triplet's head and tail nodes, and `relation` is the ID to which the relation type between 
-    head and tail is mapped by `RELATION_TYPE_TO_ID_MAP`."""
+    htr_triplet_batch_loader: Iterator[list[torch.Tensor]]
+    """An iterator wrapping a PyTorch `DataLoader`, which batches and returns entity-relation-entity triplets and track 
+    feature vectors (stacked into a matrix)."""
 
-    def __init__(self, data: HeteroData):
+    uij_ego_network_batch_loader: Iterator[HeteroData]
+    """An iterator wrapping a PyTorch Geometric `LinkNeighborLoader`, which returns subgraphs expanded outward from 
+    batches of playlist-to-track edges -- the ego-networks of the playlist nodes that head these edges. These batches 
+    also have negative (false) playlist-to-track edges, to be used in model loss and backpropagation."""
+
+    def __init__(self, data: HeteroData, batch_size: int = 1024, num_hops: int = 3):
         """
-        Creates a new `EntityRelationTripletDataset` object from a PyTorch Geometric `HeteroData` object representing a
-        heterogeneous graph of tracks, playlists, albums, artists, and the relations between them.
-        #### Parameters:
-        - `data`: the `HeteroData` object from which to assemble entity-relation-entity triplets
+        Creates an `EntityRelationTripletAndEgoNetworkDataLoader` for a heterogeneous graph.
+        #### Parameters: 
+        - `data`: the heterogeneous graph, represented as a PyTorch Geometric `HeteroData` object
+        - `batch_size`: the number of entity-relation-entity triplets and playlist-to-track edges per batch of data 
+        returned by this loader
+        - `num_hops`: the number of hops from each batch's playlist nodes to expand subgraphs (ego-networks) by
         """
-        self.x = data[GraphEntityType.TRACK].x
         triplets = []
-        for edge_type in data.metadata()[1]:
+        track_feature_matrices = []
+        for edge_type in data.edge_types:
             # For each relation type, get its matrix of edge indices (i.e., the indices of each triplet's head and tail), 
             # transpose it, then add a new column for the ID that relation type maps to:
             edge_index_for_relation = data[edge_type].edge_index
@@ -63,49 +79,63 @@ class EntityRelationTripletDataset(Dataset):
                                                torch.full((1, num_edges_for_relation), RELATION_TYPE_TO_ID_MAP[edge_type[1]], dtype=torch.long)), 
                                                dim=0)
             # Shuffle the order in which the entity-relation-entity triplets are added:
-            triplets.append(triplets_for_relation.T[torch.randperm(num_edges_for_relation)])
-        self.triplets = torch.cat(triplets, dim=0)
+            shuffled_triplets = triplets_for_relation.T[torch.randperm(num_edges_for_relation)]
+            triplets.append(shuffled_triplets)
+            # Also retrieve the corresponding feature vectors for the nodes in the triplets representing tracks:
+            track_feature_matrices.append(data[GraphEntityType.TRACK].x[
+                shuffled_triplets[:, 0 if (edge_type[0] == GraphEntityType.TRACK) else 1]])
+            
+        # Wrap the triplets and track feature matrix in a PyTorch DataLoader:
+        self.htr_triplet_batch_loader = iter(DataLoader(TensorDataset(*map(lambda x: torch.cat(x, dim=0), (triplets, track_feature_matrices))), 
+                                                                 batch_size=batch_size, shuffle=True, drop_last=True))
+   
+        # Reverses the input graph's edges. PyTorch Geometric's LinkNeighborLoader, by default, builds subgraphs 
+        # tail-to-head starting with a given edge type, but we want these subgraphs head-to-tail so that they are
+        # ego-networks of batches of playlist entity nodes, and information flows "upstream" towards these nodes in message-passing.
+        data_deepcopy = HeteroData()
+        # Deep-copy all of the information stored in the input HeteroData object:
+        for node_type in data.node_types:
+            data_deepcopy[node_type].num_nodes = data[node_type].num_nodes
+        for (head, relation, tail), edge_index in data.edge_index_dict.items():
+            # Clone before flipping edge index tensors to avoid memory errors:
+            flipped_edge_index = edge_index.clone().flip(0)
+            data_deepcopy[(tail, relation, head)].edge_index = flipped_edge_index
+        
+        # Maintains a PyTorch Geometric LinkNeighborLoader to produce ego-network subgraphs rooted in playlist node batches,
+        # also sampling negative playlist-to-track edges:
+        u_i_j_edge_type = (GraphEntityType.TRACK, GraphRelationType.HAS_TRACK, GraphEntityType.PLAYLIST)
+        self.uij_ego_network_batch_loader = iter(LinkNeighborLoader(data_deepcopy, 
+                                                                      num_neighbors={e: [self.NUM_NEIGHBORS_PER_HOP] * (num_hops - 1) 
+                                                                                     for e in data_deepcopy.edge_types}, 
+                                                                      edge_label_index=(u_i_j_edge_type, data_deepcopy[u_i_j_edge_type].edge_index),
+                                                                      edge_label=torch.ones(data_deepcopy[u_i_j_edge_type].edge_index.size(1)),
+                                                                      neg_sampling_ratio=1, batch_size=batch_size, shuffle=True))
     
-    def __len__(self) -> int:
-        return self.triplets.size(0)
-    
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        head, tail, relation = triplet_at_index = self.triplets[index]
-        return {EntityRelationTripletDatasetEntryKey.X: self.x[tail 
-                                                               if (relation == RELATION_TYPE_TO_ID_MAP[GraphRelationType.HAS_TRACK]) 
-                                                               else head],
-                EntityRelationTripletDatasetEntryKey.TRIPLET: triplet_at_index}
-    
-    @staticmethod
-    def split_by_fraction(dataset: EntityRelationTripletDatasetOrSubset, fraction: float) -> list[Subset['EntityRelationTripletDataset']]:
+    def __iter__(self) -> 'EntityRelationTripletAndEgoNetworkDataLoader':
+        """Returns this `EntityRelationTripletAndEgoNetworkDataLoader` instance, which itself implements the iterator 
+        protocol.
+        #### Returns: 
+        this object itself
         """
-        Randomly splits an input `EntityRelationTripletDataset`, or a subset of one, into two.
-        #### Parameters:
-        - `dataset`: the dataset to split
-        - `fraction`: the fraction of dataset entries for one output data subset to take, and the other be left with
+        return self
+    
+    def __next__(self) -> dict[str, torch.Tensor | HeteroData]:
+        """
+        Produces a new batch of entity-relation-entity triplets, and a new subgraph of a batch of playlist entity 
+        nodes' ego-networks.
         #### Returns:
-        two subsets (of PyTorch's `Subset` type) of the input dataset, its entries randomly apportioned among the two 
-        according to `fraction`
-        #### Throws:
-        - `ValueError`: if `fraction` is not a single number between 0 and 1
+        a dictionary with three entries: a batch of entity-relation-entity triplets (dimension `[batch_size, 3]`); a 
+        matrix (`[batch_size, num_track_features]`), of which the rows are feature vectors for whichever node of the 
+        triplet at the same index represents a track; and a `HeteroData` object for a `num_hops`-hop subgraph rooted 
+        in `batch_size` playlist-to-track edges, also sampling an equal number of negative edges with the same playlist
+        nodes as heads
         """
-        if 0 <= fraction <= 1:
-            return random_split(dataset, (fraction, 1 - fraction))
-        raise ValueError('The fraction by which to split the input dataset must be a single number between 0 and 1.')
-    
-    @staticmethod
-    def create_dataloader(dataset: EntityRelationTripletDatasetOrSubset, batch_size: int = 1024) -> DataLoader['EntityRelationTripletDataset']:
-        """
-        Wrapper method for creating a PyTorch `DataLoader` that loads entries of an `EntityRelationTripletDataset` (or a 
-        subset of one) in shuffled batches.
-        #### Parameters:
-        - `dataset`: the dataset to return a `DataLoader` of
-        - `batch_size`: the number of entries per data loader batch
-        #### Returns:
-        a PyTorch `DataLoader` object with parameters `dataset` and `batch_size` appropriately set, and `shuffle` and 
-        `drop_last` set to `True`
-        """
-        return DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+        htr_triplet_batch, track_feature_matrix = next(self.htr_triplet_batch_loader)
+        return {
+            EntityRelationTripletAndEgoNetworkDataLoaderKey.HTR_TRIPLET_BATCH: htr_triplet_batch,
+            EntityRelationTripletAndEgoNetworkDataLoaderKey.TRACK_FEATURE_MATRIX: track_feature_matrix,
+            EntityRelationTripletAndEgoNetworkDataLoaderKey.UIJ_EGO_NETWORK_BATCH: next(self.uij_ego_network_batch_loader)
+        }
 
 def create_hetero_data(x: torch.Tensor, 
                        playlist_to_track_edge_index: torch.Tensor,
@@ -157,6 +187,24 @@ def create_hetero_data(x: torch.Tensor,
     data[GraphEntityType.TRACK, GraphRelationType.HAS_ARTIST, GraphEntityType.ARTIST].edge_index = track_to_artist_edge_index
     data[GraphEntityType.TRACK, GraphRelationType.IN_ALBUM, GraphEntityType.ALBUM].edge_index = track_to_album_edge_index
     return data
+ 
+def train_test_split(data: HeteroData, fraction: float) -> tuple[HeteroData, HeteroData]:
+    """
+    Randomly splits an input `HeteroData` by its edges into two subgraphs intended for model training and testing.
+    #### Parameters:
+    - `data`: the `HeteroData` object the edges of which to split
+    - `fraction`: the fraction of edges for one output subgraph to take, and the other be left with
+    #### Returns:
+    two subgraphs (themselves `HeteroData` instances) of the input, its edges randomly apportioned among the two 
+    according to `fraction`
+    #### Throws:
+    - `ValueError`: if `fraction` is not a single number between 0 and 1
+    """
+    if (fraction < 0) or (fraction > 1):
+        raise ValueError('The fraction by which to split the input HeteroData\'s edges must be a single number between 0 and 1.')
+    traindata, _, testdata = RandomLinkSplit(num_val=0, num_test=(1 - fraction), is_undirected=False, split_labels=True,
+                                             add_negative_train_samples=False, edge_types=data.edge_types)(data)
+    return traindata, testdata
 
 def _get_num_nodes_from_edge_index_matrix(edge_index: torch.Tensor, from_first_row: bool) -> float:
-    return torch.max(edge_index, dim=1)[0][0 if from_first_row else 1].item()
+    return torch.max(edge_index, dim=1)[0][0 if from_first_row else 1].item() + 1

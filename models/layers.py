@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from utils.torchdatautils import (
     RELATION_TYPE_TO_ID_MAP,
-    EntityRelationTripletDatasetEntryKey,
+    EntityRelationTripletAndEgoNetworkDataLoaderKey,
 )
 
 from .graph import GraphEntityType, GraphRelationType
@@ -44,6 +44,9 @@ class KnowledgeGraphEmbeddingLayer(nn.Module):
     embedding_dim: int
     """Dimension of both entity and relation embeddings."""
 
+    track_feature_dim: int
+    """The number of features tracks will have."""
+
     def __init__(self, num_nodes_by_type: dict[str, int], track_feature_dim: int, embedding_dim: int = 64):
         """
         Creates a new `KnowledgeGraphEmbeddingLayer` with all entity and relation embeddings initialized.
@@ -55,6 +58,7 @@ class KnowledgeGraphEmbeddingLayer(nn.Module):
         """
         super().__init__()
         self.embedding_dim = embedding_dim
+        self.track_feature_dim = track_feature_dim
         # Create learnable embeddings for each entity in the graph and keeps them all in a single nn.Embedding layer, in
         # which each entity type is allocated its own contiguous range:
         self.type_offsets = {}
@@ -92,9 +96,26 @@ class KnowledgeGraphEmbeddingLayer(nn.Module):
         #### Returns:
         a dictionary with four entries: the embeddings of the triplets' heads, tails, and relations, and the triplets'
         TransR scores
+        #### Throws:
+        - `KeyError`: if `input` doesn't have entries for both triplets and a track feature matrix
+        - `ValueError`: if the dimension of `input`'s track feature matrix doesn't match the `track_feature_dim` with 
+        which this layer was instantiated, or the matrix of triplets doesn't have exactly three columns
         """
-        x = input[EntityRelationTripletDatasetEntryKey.X]
-        triplets = input[EntityRelationTripletDatasetEntryKey.TRIPLET]
+        for key in (EntityRelationTripletAndEgoNetworkDataLoaderKey.TRACK_FEATURE_MATRIX, 
+                    EntityRelationTripletAndEgoNetworkDataLoaderKey.HTR_TRIPLET_BATCH):
+            if key not in input:
+                raise KeyError(f'The input dictionary representing a heterogeneous graph needs an entry with key {key}.')
+        x = input[EntityRelationTripletAndEgoNetworkDataLoaderKey.TRACK_FEATURE_MATRIX]
+        triplets = input[EntityRelationTripletAndEgoNetworkDataLoaderKey.HTR_TRIPLET_BATCH]
+        if (input_track_feature_dim := x.size(1)) != self.track_feature_dim:
+            raise ValueError(f'The dimension of the input track feature matrix ({input_track_feature_dim}) does not ' 
+                             + 'match the value of the track_feature_dim parameter passed into this layer\'s ' 
+                             + f'constructor ({self.track_feature_dim}).')
+        if triplets.size(1) != 3:
+            raise ValueError('The input matrix of entity-relation-entity triplets must have only three columns: the ' 
+                             + 'first for each triplet\'s head, the second their tails, and the third the IDs of their ' 
+                             + 'relation types.')
+
         head_embeddings = torch.empty((triplets.size(0), self.embedding_dim))
         tail_embeddings = torch.empty((triplets.size(0), self.embedding_dim))
         for relation in GraphRelationType._RELATIONS:
